@@ -15,7 +15,7 @@ use humansize::{format_size, BINARY};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
-use tokio::{io::AsyncReadExt as _, join, sync::Mutex};
+use tokio::{io::AsyncReadExt as _, join, sync::{Mutex, Semaphore}};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FileEntry {
@@ -42,6 +42,9 @@ pub struct Manifest {
 
 const CHUNK_SIZE: u64 = 1024 * 1024 * 64;
 const MAX_FILE_COUNT: usize = 512;
+// Limit concurrent 7z operations to prevent OOM errors
+// Adjust this based on available system memory
+const MAX_CONCURRENT_ARCHIVES: usize = 2;
 
 use crate::versions::{create_backend_constructor, types::VersionFile};
 
@@ -138,6 +141,9 @@ pub async fn generate_manifest_rusty<T: Fn(String), V: Fn(f32)>(
     let total_manifest_length = Arc::new(AtomicU64::new(0));
 
     let backend = Arc::new(Mutex::new(backend));
+    
+    // Limit concurrent 7z operations to prevent OOM
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_ARCHIVES));
 
     let futures: FuturesUnordered<impl Future<Output = Result<(), Error>>> =
         FuturesUnordered::new();
@@ -148,7 +154,11 @@ pub async fn generate_manifest_rusty<T: Fn(String), V: Fn(f32)>(
         let backend = backend.clone();
         let total_manifest_length = total_manifest_length.clone();
         let manifest = manifest.clone();
+        let semaphore = semaphore.clone();
         futures.push(async move {
+            // Acquire permit before processing chunk
+            let _permit = semaphore.acquire().await.map_err(|e| anyhow!("failed to acquire semaphore: {}", e))?;
+            
             let mut read_buf = vec![0; 1024 * 1024 * 64];
 
             let uuid = uuid::Uuid::new_v4().to_string();

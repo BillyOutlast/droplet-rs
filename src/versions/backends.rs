@@ -148,7 +148,10 @@ impl ZipVersionBackend {
 impl VersionBackend for ZipVersionBackend {
     async fn list_files(&mut self) -> anyhow::Result<Vec<VersionFile>> {
         let mut list_command = Command::new("7z");
-        list_command.args(vec!["l", &self.path]);
+        // Memory optimization flags:
+        // -mx=1: Use minimal compression (fast, low memory)
+        // -ms=off: Disable solid archive (prevents loading entire archive into memory)
+        list_command.args(vec!["l", "-mx=1", "-ms=off", &self.path]);
         let result = list_command.output().await?;
         if !result.status.success() {
             return Err(anyhow!(
@@ -201,7 +204,11 @@ impl VersionBackend for ZipVersionBackend {
         _end: u64,
     ) -> anyhow::Result<Box<dyn MinimumFileObject>> {
         let mut read_command = Command::new("7z");
-        read_command.args(vec!["e", "-so", &self.path, &file.relative_filename]);
+        // Memory optimization flags:
+        // -mx=1: Use minimal compression/decompression memory
+        // -ms=off: Disable solid archive processing
+        // -bd: Disable progress indicator (slightly reduces overhead)
+        read_command.args(vec!["e", "-mx=1", "-ms=off", "-bd", "-so", &self.path, &file.relative_filename]);
         let mut output = read_command
             .stdout(Stdio::piped())
             .spawn()
